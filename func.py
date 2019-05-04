@@ -8,15 +8,15 @@ import http.cookiejar
 import shutil
 import string
 import os
+import re
 import cv2
 import numpy as np
 
 temp_dir = (os.environ["TMP"])+'\\evaluateTemp'
 
-
-def getCheckCode():
+def getCheckCode(base_url):
     # 携带Cookie获取验证码并保留在CookieJar中管理
-    captcha_url = "http://jwgl3.jmu.edu.cn/Common/CheckCode.aspx"
+    captcha_url = base_url + '/Common/CheckCode.aspx'
     captcha_path = temp_dir+'\\captcha.gif'
     cookie = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie), urllib.request.HTTPHandler)
@@ -82,7 +82,7 @@ def predictCheckCode(captcha_path):
         char_idxs = np.argmax(vec, axis=1)
         return ''.join([characters[idx] for idx in char_idxs])
 
-    model = load_model('gmu_jw_captcha_break_splited.h5')
+    model = load_model('jmu_jw_captcha_break_splited.h5')
     width, height = 12, 16
 
     images = process_image(captcha_path)
@@ -92,13 +92,13 @@ def predictCheckCode(captcha_path):
     y = model.predict(X)
     predict_word = vec2word(y)
 
-    print("Predict: "+predict_word)
+    print("验证码预测: "+predict_word)
     return predict_word
 
 
-def userLogin(captcha):
-    home_url = "http://jwgl3.jmu.edu.cn/Login.aspx"
-    home_page = BeautifulSoup(urllib.request.urlopen(home_url), "html.parser", from_encoding="gb2312")
+def userLogin(captcha, base_url):
+    login_url = base_url + "/Login.aspx"
+    home_page = BeautifulSoup(urllib.request.urlopen(login_url), "html.parser", from_encoding="gb2312")
     get_viewstate = (home_page.find_all("input", id="__VIEWSTATE")[0])["value"]
 
     username = input('输入用户名： ')
@@ -118,12 +118,12 @@ def userLogin(captcha):
     # 禁止gzip压缩
     headers = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Referer': 'http://jwgl3.jmu.edu.cn/Login.aspx',
+        'Referer': login_url,
         'Connection': 'Keep-Alive'
     }
 
     # 构建请求，模拟登录post
-    login_request = urllib.request.Request(home_url, data=post_data, headers=headers)
+    login_request = urllib.request.Request(login_url, data=post_data, headers=headers)
     login_response = urllib.request.urlopen(login_request)
     login_status = login_response.read()
 
@@ -131,8 +131,8 @@ def userLogin(captcha):
     login_page = BeautifulSoup(login_status, "html.parser", from_encoding='utf-8')
     get_title = str(login_page.find_all("title")[0].get_text(strip=True))
     if get_title == "集美大学综合教务管理系统":
-        i = os.system('cls')
-        print("你已成功登录！")
+        os.system('cls')
+        print("\n你已成功登录！")
         flag = 1
     else:
         print("登录失败。")
@@ -142,13 +142,13 @@ def userLogin(captcha):
     return flag
 
 
-def getPage(href):
+def getPage(href, base_url):
     headers = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Connection': 'Keep-Alive',
         'DNT': '1',
-        'Origin': 'http://jwgl3.jmu.edu.cn',
-        'Referer': 'http://jwgl3.jmu.edu.cn/Student/TeacherEvaluation/Main.htm',
+        'Origin': base_url,
+        'Referer': base_url+'/Student/TeacherEvaluation/Main.htm',
         'Upgrade-Insecure-Requests': '1'
     }
     ev_request = urllib.request.Request(href, headers=headers)
@@ -162,7 +162,6 @@ def getEvaluateList(ev_content):
     bs = BeautifulSoup(ev_content, "html.parser")
     hrefs = bs.find_all("a")
     hrefs_len = len(hrefs)
-    print(hrefs_len)
     if hrefs_len != 0:
         for i in range(0, hrefs_len):
             hrefs[i] = hrefs[i].get('href')[26:]+"\n"
@@ -174,57 +173,62 @@ def getEvaluateList(ev_content):
     return hrefs_len
 
 
-def getEvaluateData(courseNum):
-    courseUrl = 'http://jwgl3.jmu.edu.cn/Student/TeacherEvaluation/TeacherEvaluate.aspx?Code='+courseNum
+def getEvaluateData(courseNum, base_url):
+    courseUrl = base_url + '/Student/TeacherEvaluation/TeacherEvaluate.aspx?Code='+courseNum
     headers = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Connection': 'Keep-Alive',
         'DNT': '1',
-        'Origin': 'http://jwgl3.jmu.edu.cn',
-        'Referer': 'http://jwgl3.jmu.edu.cn/Student/TeacherEvaluation/TeacherEvaluationList.aspx',
+        'Origin': base_url,
+        'Referer': base_url + '/Student/TeacherEvaluation/TeacherEvaluationList.aspx',
         'Upgrade-Insecure-Requests': '1'
     }
     get_request = urllib.request.Request(courseUrl, headers=headers)
     get_response = BeautifulSoup(urllib.request.urlopen(get_request), "html.parser", from_encoding='utf-8')
-    response = str(get_response)
+    response = get_response
     viewstate = (get_response.find_all("input", id="__VIEWSTATE")[0])["value"]
     return viewstate, response
 
 
-def postEvaluateData(courseNum, viewstate):
-    courseUrl = 'http://jwgl3.jmu.edu.cn/Student/TeacherEvaluation/TeacherEvaluate.aspx?Code='+courseNum
+def makeFields(response):
+    _form = response.find("form", attrs={'name': 'aspnetForm'})
+    nodes = _form.find_all("input")
+    spans = _form.find_all("span")
+    label_matches = list()
+    nodes_matches = list()
+    for span in spans:
+        _id = str(span.attrs['id'])
+        if re.match(r"ctl00_ContentPlaceHolder3_GVTeacherEvaluation_ctl\d{2}_LabelAmount", _id) is not None:
+            label_matches.append(span)
+            nodes_matches.append({
+                "id": _id[49:51],
+                "type": "amount",
+                "amount": int(span.string)
+            })
+    return nodes_matches
+
+
+def postEvaluateData(courseNum, viewstate, fields, base_url):
+    courseUrl = base_url + '/Student/TeacherEvaluation/TeacherEvaluate.aspx?Code='+courseNum
     # 创建post数据
-    post_data = urllib.parse.urlencode({
-        'ctl00_ToolkitScriptManager1_HiddenField': '',
-        '__EVENTTARGET': '',
-        '__EVENTARGUMENT': '',
-        '__VIEWSTATE': viewstate,
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl02$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl03$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl04$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl05$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl06$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl07$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl08$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl09$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl10$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl11$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl12$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl13$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl14$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl15$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl16$AAA': 'RadioButton1',
-        'ctl00$ContentPlaceHolder3$TextBoxSumScore': '100',
-        'ctl00$ContentPlaceHolder3$TextBoxSuggestion': ' ',
-        'ctl00$ContentPlaceHolder3$ButtonSubmit': '提交'
-    })
-    post_data = post_data.encode('utf-8')
+    post_map = dict()
+    post_map['ctl00_ToolkitScriptManager1_HiddenField'] = ''
+    post_map['__EVENTTARGET'] = ''
+    post_map['__EVENTARGUMENT'] = ''
+    post_map['__VIEWSTATE'] = viewstate
+    post_map['ctl00$ContentPlaceHolder3$ButtonSubmit'] = '提交'
+    post_map['ctl00$ContentPlaceHolder3$TextBoxSuggestion'] = ''
+    for field in fields:
+        if field['type'] == 'amount':
+            post_map['ctl00$ContentPlaceHolder3$GVTeacherEvaluation$ctl'+field['id']+'$TextBoxScore'] = field['amount']
+    post_data = urllib.parse.urlencode(post_map).encode('utf-8')
+
     headers = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Cache-Control': 'max-age=0',
         'Connection': 'Keep-Alive',
         'DNT': '1',
-        'Origin': 'http://jwgl3.jmu.edu.cn',
+        'Origin': base_url,
         'Referer': courseUrl,
         'Upgrade-Insecure-Requests': '1'
     }

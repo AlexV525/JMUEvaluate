@@ -2,7 +2,7 @@
 import os
 import func
 
-os.system("title 集美大学教务系统自动评测 v20180111 - Author : https://blog.alexv525.com/")
+os.system("title 集美大学教务系统自动评测 v20190504 - Author : https://blog.alexv525.com/")
 temp_dir = (os.environ["TMP"])+'\\evaluateTemp'
 try:
     func.cleanDir(temp_dir)
@@ -12,13 +12,23 @@ os.mkdir(temp_dir)
 
 # 登录过程
 
-flag = func.userLogin(func.predictCheckCode(func.getCheckCode()))
+base_url = ""
+
+# iscy = input('是否为诚毅学院？(是{1}/否{0})')
+iscy = "1"
+if iscy == "1" or iscy == 1:
+    base_url = "http://cyjwgl.jmu.edu.cn"
+else:
+    base_url = "http://jwgl3.jmu.edu.cn"
+
+checkCode = func.getCheckCode(base_url)
+flag = func.userLogin(func.predictCheckCode(checkCode), base_url)
 
 # 登录后执行抓取评测列表，进行逐个评测
 if flag == 1:
     print("获得评测课程列表中...")
-    ev_url = 'http://jwgl3.jmu.edu.cn/Student/TeacherEvaluation/TeacherEvaluationList.aspx'
-    ev_list = str(func.getPage(ev_url))
+    ev_url = base_url + '/Student/TeacherEvaluation/TeacherEvaluationList.aspx'
+    ev_list = str(func.getPage(ev_url, base_url))
     courseCount = func.getEvaluateList(ev_list)
     print("共有%d门课程需要教学测评。" % courseCount)
     if courseCount != 0:
@@ -32,11 +42,10 @@ if flag == 1:
         hrefs_num = len(hrefs)
         for i in range(0, hrefs_num):
             hrefs[i] = hrefs[i].replace("\n", "")
-            viewstate, response = func.getEvaluateData(hrefs[i])
-            if response == ev_list:
+            viewstate, response = func.getEvaluateData(hrefs[i], base_url)
+            if str(response) == ev_list:
                 print('课程id：'+hrefs[i]+' 已评测过，跳过')
             else:
-                func.postEvaluateData(hrefs[i], viewstate)
+                fields = func.makeFields(response)
+                func.postEvaluateData(hrefs[i], viewstate, fields, base_url)
         print('评测完成。')
-
-os.system('pause')
